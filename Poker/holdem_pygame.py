@@ -1,276 +1,232 @@
-import pygame, sys, time, os, threading, pickle
-from holdem_env import HoldemEnv
-from poker_agent import HeuristicAgent, PolicyAgent, RandomAgent
+# holdem_env.py
+import random
+from typing import List, Tuple, Dict, Any
 
+RANKS = [2,3,4,5,6,7,8,9,10,11,12,13,14]  # 11=J,12=Q,13=K,14=A
+SUITS = ["Corazones","Diamantes","Trebol","Copas"]
 
+def rank_name(r:int):
+    if r==14: return "A"
+    if r==13: return "K"
+    if r==12: return "Q"
+    if r==11: return "J"
+    return str(r)
 
-RUTA_CARTAS = r"E:\Sistemas\CardBlack\CardBlack\cards"
+class HoldemEnv:
+    def __init__(self, n_players:int=4, seed=None):
+        assert 2 <= n_players <= 9
+        self.n_players = n_players
+        self.rng = random.Random(seed)
+        self.reset()
 
-pygame.init()
-ANCHO, ALTO = 1200, 800
-pantalla = pygame.display.set_mode((ANCHO, ALTO))
-pygame.display.set_caption("Texas Hold'em - Pygame")
-clock = pygame.time.Clock()
-FONT = pygame.font.SysFont("Arial", 20)
-FONT_L = pygame.font.SysFont("Arial", 28, bold=True)
+    def new_deck(self):
+        deck = [(r,s) for r in RANKS for s in SUITS]
+        self.rng.shuffle(deck)
+        return deck
 
-BG = (6, 100, 40)
-CARD_W, CARD_H = 90, 140
+    def reset(self):
+        self.deck = self.new_deck()
+        # hole cards per player
+        self.hands: List[List[Tuple[int,str]]] = [ [self.deck.pop(), self.deck.pop()] for _ in range(self.n_players) ]
+        self.board: List[Tuple[int,str]] = []
+        # simple pot/bets: each puts ante 1
+        self.pot = 0
+        self.stacks = [1000 for _ in range(self.n_players)]
+        # For simplicity ante 1 from each active player
+        self.active = [True for _ in range(self.n_players)]
+        for i in range(self.n_players):
+            self.stacks[i] -= 1
+            self.pot += 1
+        self.bets = [0 for _ in range(self.n_players)]
+        self.round_stage = "preflop"  # preflop, flop, turn, river, showdown
+        self.current_player = 0  # button mechanics not considered; we start at 0
+        self.raises_in_round = 0
+        self.terminal = False
+        return self._get_state(0)
 
-cache = {}
-
-def try_load_image(names):
-    for nm in names:
-        for ext in (".png", ".jpg", ".bmp"):
-            path = os.path.join(RUTA_CARTAS, nm + ext)
-            if os.path.exists(path):
-                try:
-                    img = pygame.image.load(path).convert_alpha()
-                    img = pygame.transform.smoothscale(img, (CARD_W, CARD_H))
-                    return img
-                except Exception as e:
-                    print("Error loading:", path, e)
-    return None
-
-def get_card_image(card):
-    r, s = card
-    rstr = {14:"A",13:"K",12:"Q",11:"J"}.get(r, str(r))
-    candidates = [
-        f"{rstr}_{s}", f"{rstr}{s}", f"{r}_{s}", f"{r}{s}",
-        f"{rstr}_{s.lower()}", f"{rstr}{s[0]}"
-    ]
-    eng = {"Corazones":"Hearts","Diamantes":"Diamonds","Trebol":"Clubs","Copas":"Spades"}
-    if s in eng:
-        candidates += [f"{rstr}_{eng[s]}", f"{rstr}{eng[s]}", f"{rstr}{eng[s][0]}"]
-    key = f"{rstr}_{s}"
-    if key in cache:
-        return cache[key]
-    img = try_load_image(candidates)
-    if img is None:
-        surf = pygame.Surface((CARD_W, CARD_H))
-        surf.fill((250,250,250))
-        pygame.draw.rect(surf, (0,0,0), surf.get_rect(), 2, border_radius=15)
-        t = FONT.render(rstr, True, (0,0,0))
-        surf.blit(t, (8,8))
-        cache[key] = surf
-        return surf
-    cache[key] = img
-    return img
-
-def text(t,x,y,clr=(255,255,255), font=FONT):
-    pantalla.blit(font.render(t, True, clr), (x,y))
-
-# --- Carga el agente entrenado ---
-with open("policy_agent.pkl", "rb") as f:
-    agente_entrenado = pickle.load(f)
-
-class HoldemUI:
-    def __init__(self, n_players=4):
-        self.n = n_players
-        self.env = HoldemEnv(n_players=self.n)
-        self.stacks = [1000 for _ in range(self.n)]
-        self.agent = agente_entrenado
-        # Bots todos con agente entrenado (puedes variar aquí para mezcla)
-        self.bots = [agente_entrenado for _ in range(self.n-1)]
-        self.human_index = 0
-        self.reset_hand()
-        self.mode = "menu"
-        self.auto_ai = False
-        self.ai_thread = None
-
-        # Posiciones jugadores (ajusta si quieres)
-        self.posiciones_jugadores = {
-            0: (ANCHO//2, ALTO - 150),
-            1: (ANCHO//2, 80),
-            2: (ANCHO - 200, ALTO - 325),
-            3: (200, ALTO - 325),
+    def _get_state(self, player:int):
+        return {
+            "player": player,
+            "hole": tuple(self.hands[player]),
+            "board": tuple(self.board),
+            "pot": self.pot,
+            "stacks": tuple(self.stacks),
+            "bets": tuple(self.bets),
+            "active": tuple(self.active),
+            "stage": self.round_stage
         }
 
-    def reset_hand(self):
-        self.env.reset()
-        self.msg = "Nueva mano: presiona 'New Hand'."
-        self.selected = None
-        self.running = False
+    def legal_actions(self, player:int):
+        # 0 fold, 1 check/call, 2 bet/raise (fixed)
+        if not self.active[player]:
+            return []
+        return [0,1,2]
 
-    def new_hand(self, mode="human"):
-        self.mode = mode
-        self.env.reset()
-        self.msg = "Mano iniciada"
-        self.running = True
-        if mode == "ai_vs_ai":
-            if self.ai_thread is None or not self.ai_thread.is_alive():
-                self.auto_ai = True
-                self.ai_thread = threading.Thread(target=self.run_ai_vs_ai, daemon=True)
-                self.ai_thread.start()
+    def step(self, player:int, action:int):
+        """
+        player: who acts; action in {0,1,2}
+        Returns: (done_flag, info_dict)
+        info_dict contains 'message' and if terminal 'winners' etc.
+        """
+        if self.terminal:
+            return True, {"msg":"Hand already finished"}
 
-    def draw_table(self):
-        pantalla.fill(BG)
-        cx, cy = ANCHO//2, ALTO//2 - 30
-        text(f"Pot: {self.env.pot}", cx-40, cy-120, (255,255,200), FONT_L)
-        board = self.env.board
-        startx = cx - ((len(board)* (CARD_W+10))//2)
-        for i,c in enumerate(board):
-            img = get_card_image(c)
-            pantalla.blit(img, (startx + i*(CARD_W+10), cy - CARD_H//2))
+        if not self.active[player]:
+            return False, {"msg":"Player inactive"}
 
-        seat_w = CARD_W + 20
-        seat_h = CARD_H // 2
+        if action == 0:  # fold
+            self.active[player] = False
+            # if only one left, that player wins
+            if sum(1 for a in self.active if a) == 1:
+                winner = next(i for i,a in enumerate(self.active) if a)
+                self.stacks[winner] += self.pot
+                self.terminal = True
+                return True, {"msg":"folded","winner":winner}
+            # else move turn
+            self._advance_player()
+            return False, {"msg":"fold"}
 
-        mostrar_todas_cartas = True  # True para ver todas las cartas en debug
-
-        for i in range(self.n):
-            x, y = self.posiciones_jugadores.get(i, (50 + i*150, ALTO - 150))
-            rect = pygame.Rect(int(x - seat_w/2), int(y - seat_h/2), seat_w, seat_h)
-
-            color_rect = (80, 80, 80)
-            if self.running and self.env.current_player == i:
-                color_rect = (200, 100, 100)
-            pygame.draw.rect(pantalla, color_rect, rect, border_radius=8)
-
-            name = "Tú" if i == self.human_index else f"Bot {i}"
-            text(name, rect.x + 6, rect.y + 4)
-            text(f"${self.stacks[i]}", rect.x + 6, rect.y + 24)
-
-            # Cartas visibles
-            for j, card in enumerate(self.env.hands[i]):
-                if i == self.human_index or self.env.round_stage == "showdown" or not self.running or self.mode != "human" or mostrar_todas_cartas:
-                    img = get_card_image(card)
+        if action == 1:  # check/call: we call to match max(bets)
+            max_bet = max(self.bets)
+            to_call = max_bet - self.bets[player]
+            if to_call > self.stacks[player]:
+                to_call = self.stacks[player]
+            self.stacks[player] -= to_call
+            self.bets[player] += to_call
+            self.pot += to_call
+            # check if betting round finished:
+            finished = self._check_betting_round_end()
+            if finished:
+                progressed = self._progress_stage()
+                if progressed:
+                    # reset bets for next round
+                    self.bets = [0 for _ in range(self.n_players)]
+                    self.raises_in_round = 0
                 else:
-                    back = pygame.Surface((CARD_W, CARD_H))
-                    back.fill((30, 30, 120))
-                    pygame.draw.rect(back, (0, 0, 0), back.get_rect(), 2, border_radius=15)
-                    img = back
+                    # showdown
+                    winners = self._resolve_showdown()
+                    for w in winners:
+                        self.stacks[w] += self.pot // len(winners)
+                    self.terminal = True
+                    return True, {"msg":"showdown","winners":winners}
+            self._advance_player()
+            return False, {"msg":"call/check"}
 
-                px = rect.x + j * (CARD_W // 2)
-                py = rect.y - CARD_H - 10 if y > ALTO//2 else rect.y + seat_h + 10
-                pantalla.blit(img, (px, py))
+        if action == 2:  # bet/raise fixed size 10
+            raise_amt = 10
+            amount = min(raise_amt, self.stacks[player])
+            self.stacks[player] -= amount
+            self.bets[player] += amount
+            self.pot += amount
+            self.raises_in_round += 1
+            self._advance_player()
+            return False, {"msg":"bet", "amount":amount}
 
-        text(self.msg, 20, ALTO - 60)
-        text(f"Etapa: {self.env.round_stage}", 20, ALTO - 90)
+        return False, {"msg":"unknown"}
 
-    def human_action(self, action):
-        if not self.running:
-            self.msg = "Inicia una nueva mano primero"
-            return
-        cur = self.env.current_player
-        if cur != self.human_index:
-            self.msg = "No es tu turno"
-            return
-        try:
-            obs, reward, done, info = self.env.step(cur, action)
-        except Exception as e:
-            self.msg = str(e)
-            return
+    def _advance_player(self):
+        # next active player
+        for _ in range(self.n_players):
+            self.current_player = (self.current_player + 1) % self.n_players
+            if self.active[self.current_player]:
+                return
 
-        self.msg = info.get("msg", "")
-        if done:
-            if "winners" in info:
-                self.msg = f"Ganadores: {info['winners']}"
-            elif "winner" in info:
-                self.msg = f"Ganador: {info['winner']}"
-            self.running = False
-        else:
-            nextp = self.env.current_player
-            if self.mode == "human" and nextp != self.human_index:
-                time.sleep(0.15)
-                self.bot_act(nextp)
+    def _check_betting_round_end(self):
+        # simplistic: betting round ends when all active players have same bet amount
+        active_bets = [self.bets[i] for i in range(self.n_players) if self.active[i]]
+        return len(active_bets) > 0 and all(b == active_bets[0] for b in active_bets)
 
-    def bot_act(self, bot_index):
-        if not self.running:
-            return
-        obs = self.env._get_obs(bot_index)
-        act = self.bots[bot_index - 1].action(obs)
-        try:
-            obs, reward, done, info = self.env.step(bot_index, act)
-        except Exception as e:
-            self.msg = str(e)
-            return
+    def _progress_stage(self):
+        # progresses and returns True if progressed to next non-showdown stage, False if reaches showdown
+        if self.round_stage == "preflop":
+            # flop: 3 cards
+            self.board += [self.deck.pop(), self.deck.pop(), self.deck.pop()]
+            self.round_stage = "flop"
+            return True
+        elif self.round_stage == "flop":
+            self.board.append(self.deck.pop())
+            self.round_stage = "turn"
+            return True
+        elif self.round_stage == "turn":
+            self.board.append(self.deck.pop())
+            self.round_stage = "river"
+            return True
+        elif self.round_stage == "river":
+            self.round_stage = "showdown"
+            return False
+        return False
 
-        self.msg = info.get("msg", "")
-        if done:
-            if "winners" in info:
-                self.msg = f"Ganadores: {info['winners']}"
-            self.running = False
-        else:
-            nextp = self.env.current_player
-            if self.mode == "human" and nextp != self.human_index:
-                time.sleep(0.05)
-                self.bot_act(nextp)
+    # --- Hand evaluation (simple but sufficient) ---
+    def _rank_hand(self, cards: List[Tuple[int,str]]):
+        # returns tuple that compares lexicographically higher = better
+        ranks = sorted([c[0] for c in cards], reverse=True)
+        suits = [c[1] for c in cards]
+        # straight detection
+        uniq = sorted(set(ranks), reverse=True)
+        straight_high = None
+        for i in range(len(uniq)-4+1):
+            window = uniq[i:i+5]
+            if len(window) >=5 and window[0] - window[-1] == 4:
+                straight_high = window[0]
+                break
+        # flush detection
+        for s in SUITS:
+            if suits.count(s) >=5:
+                # collect top 5 ranks of that suit
+                suit_ranks = sorted([c[0] for c in cards if c[1]==s], reverse=True)[:5]
+                return (8, suit_ranks)  # treat as flush rank 8
+        # counts
+        from collections import Counter
+        cnt = Counter(ranks)
+        common = cnt.most_common()
+        # check four of a kind
+        if common[0][1] == 4:
+            four = common[0][0]
+            kicker = max(r for r in ranks if r != four)
+            return (7, four, kicker)
+        # full house
+        if common[0][1] == 3 and len(common) > 1 and common[1][1] >= 2:
+            three = common[0][0]
+            pair = common[1][0]
+            return (6, three, pair)
+        if common[0][1] == 3:
+            three = common[0][0]
+            kickers = sorted([r for r in ranks if r != three], reverse=True)[:2]
+            return (3, three, kickers)
+        if len(common) >=2 and common[0][1] == 2 and common[1][1] == 2:
+            pair1, pair2 = common[0][0], common[1][0]
+            kick = max(r for r in ranks if r != pair1 and r != pair2)
+            return (2, max(pair1,pair2), min(pair1,pair2), kick)
+        if common[0][1] == 2:
+            pair = common[0][0]
+            kickers = sorted([r for r in ranks if r != pair], reverse=True)[:3]
+            return (1, pair, kickers)
+        # straight (if found)
+        if straight_high is not None:
+            return (4, straight_high)
+        # high card
+        return (0, ranks[:5])
 
-    def run_ai_vs_ai(self):
-        while self.auto_ai:
-            self.new_hand(mode="ai_vs_ai")
-            while self.running:
-                cur = self.env.current_player
-                act = self.bots[cur - 1].action(self.env._get_obs(cur))
-                _, _, done, _ = self.env.step(cur, act)
-                if done:
-                    self.running = False
-                    break
-                time.sleep(0.02)
-            time.sleep(0.2)
-            self.auto_ai = False
+    def _resolve_showdown(self):
+        # return list of winners (indices)
+        best = None
+        winners = []
+        for i in range(self.n_players):
+            if not self.active[i]:
+                continue
+            cards = self.hands[i] + self.board
+            rank = self._rank_hand(cards)
+            if best is None or rank > best:
+                best = rank
+                winners = [i]
+            elif rank == best:
+                winners.append(i)
+        return winners
 
-    def draw(self):
-        self.draw_table()
-
-# Botones
-ui = HoldemUI(n_players=4)
-btn_new = pygame.Rect(900, 600, 220, 42)
-btn_ai = pygame.Rect(900, 660, 220, 42)
-btn_bet = pygame.Rect(100, 680, 140, 40)
-btn_call = pygame.Rect(260, 680, 140, 40)
-btn_fold = pygame.Rect(420, 680, 140, 40)
-
-def draw_buttons():
-    pygame.draw.rect(pantalla, (200,200,200), btn_new)
-    pantalla.blit(FONT.render("New Hand (Human)", True, (0,0,0)), (btn_new.x+8, btn_new.y+10))
-    pygame.draw.rect(pantalla, (180,180,240), btn_ai)
-    pantalla.blit(FONT.render("New Hand (AI vs AI)", True, (0,0,0)), (btn_ai.x+8, btn_ai.y+10))
-    pygame.draw.rect(pantalla, (200,180,180), btn_bet)
-    pantalla.blit(FONT.render("Bet (1)", True, (0,0,0)), (btn_bet.x+8, btn_bet.y+10))
-    pygame.draw.rect(pantalla, (200,200,160), btn_call)
-    pantalla.blit(FONT.render("Call/Check", True, (0,0,0)), (btn_call.x+8, btn_call.y+10))
-    pygame.draw.rect(pantalla, (220,180,200), btn_fold)
-    pantalla.blit(FONT.render("Fold", True, (0,0,0)), (btn_fold.x+8, btn_fold.y+10))
-
-def main_loop():
-    running = True
-    while running:
-        for e in pygame.event.get():
-            if e.type == pygame.QUIT:
-                ui.auto_ai = False
-                running = False
-            elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                mx,my = e.pos
-                if btn_new.collidepoint(mx,my):
-                    ui.new_hand(mode="human")
-                elif btn_ai.collidepoint(mx,my):
-                    ui.auto_ai = True
-                    if ui.ai_thread is None or not ui.ai_thread.is_alive():
-                        ui.ai_thread = threading.Thread(target=ui.run_ai_vs_ai, daemon=True)
-                        ui.ai_thread.start()
-                elif btn_bet.collidepoint(mx,my):
-                    ui.human_action(2)
-                elif btn_call.collidepoint(mx,my):
-                    ui.human_action(1)
-                elif btn_fold.collidepoint(mx,my):
-                    ui.human_action(0)
-            elif e.type == pygame.KEYDOWN:
-                if e.key == pygame.K_n:
-                    ui.new_hand(mode="human")
-                if e.key == pygame.K_a:
-                    ui.auto_ai = True
-                    if ui.ai_thread is None or not ui.ai_thread.is_alive():
-                        ui.ai_thread = threading.Thread(target=ui.run_ai_vs_ai, daemon=True)
-                        ui.ai_thread.start()
-
-        ui.draw()
-        draw_buttons()
-        pygame.display.flip()
-        clock.tick(30)
-    pygame.quit()
-    sys.exit()
-
-if __name__ == "__main__":
-    main_loop()
+    def debug(self):
+        print("Stage:", self.round_stage)
+        print("Board:", self.board)
+        print("Hands:", self.hands)
+        print("Active:", self.active)
+        print("Pot:", self.pot)
+        print("Stacks:", self.stacks)

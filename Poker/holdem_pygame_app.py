@@ -1,6 +1,6 @@
 import pygame, sys, time, os, threading
 from holdem_env import HoldemEnv
-from poker_agent import HeuristicAgent, PolicyAgent, card_to_name, RandomAgent  # según tengas
+from poker_agent import PolicyAgent, RandomAgent  # Asumiendo que usas PolicyAgent y RandomAgent
 
 RUTA_CARTAS = r"E:\Sistemas\CardBlack\CardBlack\cards"
 
@@ -30,15 +30,6 @@ def try_load_image(names):
                     print("Error loading:", path, e)
     return None
 
-def create_rounded_card_image(img, radius=12):
-    rounded_surf = pygame.Surface((CARD_W, CARD_H), pygame.SRCALPHA)  # soporte transparencia
-    rect = pygame.Rect(0, 0, CARD_W, CARD_H)
-    # Dibujar fondo blanco con bordes redondeados
-    pygame.draw.rect(rounded_surf, (255, 255, 255, 255), rect, border_radius=radius)
-    # Pintar la imagen original dentro, respetando los bordes redondeados
-    rounded_surf.blit(img, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
-    return rounded_surf
-
 def get_card_image(card):
     r, s = card
     rstr = {14:"A",13:"K",12:"Q",11:"J"}.get(r, str(r))
@@ -61,8 +52,6 @@ def get_card_image(card):
         surf.blit(t, (8,8))
         cache[key] = surf
         return surf
-
-    img = create_rounded_card_image(img, radius=12)
     cache[key] = img
     return img
 
@@ -70,37 +59,41 @@ def text(t,x,y,clr=(255,255,255), font=FONT):
     pantalla.blit(font.render(t, True, clr), (x,y))
 
 class HoldemUI:
-    def __init__(self, n_players=4):  # 4 jugadores: 1 humano + 3 bots
+    def __init__(self, n_players=4):
         self.n = n_players
         self.env = HoldemEnv(n_players=self.n)
         self.stacks = [1000 for _ in range(self.n)]
-        self.agent = PolicyAgent()
-        self.bots = [HeuristicAgent() for _ in range(self.n-1)]
         self.human_index = 0
         self.reset_hand()
         self.mode = "menu"
         self.auto_ai = False
         self.ai_thread = None
 
-        # Posiciones para 4 jugadores (abajo-centro humano)
+        # Aquí usamos PolicyAgent para IA
+        self.agents = [PolicyAgent() for _ in range(self.n)]
+        # Pero la IA humana (index 0) no actúa sola
+
+        # Posiciones jugadores
         self.posiciones_jugadores = {
             0: (ANCHO//2, ALTO - 150),      # Humano abajo-centro
             1: (ANCHO//2, 80),              # Bot arriba-centro
-            2: (ANCHO - 200, ALTO - 325),   # Bot derecha-centro
-            3: (200, ALTO - 325),            # Bot izquierda-centro
+            2: (ANCHO - 200, ALTO - 325),  # Bot derecha-centro
+            3: (200, ALTO - 325),           # Bot izquierda-centro
         }
+
+        self.msg = ""
+        self.running = False
 
     def reset_hand(self):
         self.env.reset()
         self.msg = "Nueva mano: presiona 'New Hand'."
-        self.selected = None
         self.running = False
 
     def new_hand(self, mode="human"):
         self.mode = mode
         self.env.reset()
-        self.msg = "Mano iniciada"
         self.running = True
+        self.msg = "Mano iniciada"
         if mode == "ai_vs_ai":
             if self.ai_thread is None or not self.ai_thread.is_alive():
                 self.auto_ai = True
@@ -134,14 +127,20 @@ class HoldemUI:
             text(name, rect.x + 6, rect.y + 4)
             text(f"${self.stacks[i]}", rect.x + 6, rect.y + 24)
 
-            # Dibujar cartas
+            # Cartas visibles solo para ese jugador o en showdown o si la partida no corre
             for j, card in enumerate(self.env.hands[i]):
-                if i == self.human_index or self.env.round_stage == "showdown" or not self.running or self.mode != "human":
+                mostrar_carta = (
+                    i == self.human_index or 
+                    self.env.round_stage == "showdown" or
+                    not self.running or
+                    self.mode != "human"
+                )
+                if mostrar_carta:
                     img = get_card_image(card)
                 else:
-                    back = pygame.Surface((CARD_W, CARD_H), pygame.SRCALPHA)
+                    back = pygame.Surface((CARD_W, CARD_H))
                     back.fill((30, 30, 120))
-                    pygame.draw.rect(back, (0, 0, 0), back.get_rect(), 2, border_radius=12)
+                    pygame.draw.rect(back, (0, 0, 0), back.get_rect(), 2, border_radius=8)
                     img = back
 
                 px = rect.x + j * (CARD_W // 2)
@@ -175,14 +174,17 @@ class HoldemUI:
         else:
             nextp = self.env.current_player
             if self.mode == "human" and nextp != self.human_index:
-                time.sleep(0.15)
-                self.bot_act(nextp)
+                threading.Thread(target=self.bot_act, args=(nextp,), daemon=True).start()
 
     def bot_act(self, bot_index):
         if not self.running:
             return
+
+        # Espera 30 segundos para simular que la IA "piensa"
+        time.sleep(30)
+
         obs = self.env._get_obs(bot_index)
-        act = HeuristicAgent().action(obs)
+        act = self.agents[bot_index].action(obs)
         try:
             obs, reward, done, info = self.env.step(bot_index, act)
         except Exception as e:
@@ -193,32 +195,39 @@ class HoldemUI:
         if done:
             if "winners" in info:
                 self.msg = f"Ganadores: {info['winners']}"
+            elif "winner" in info:
+                self.msg = f"Ganador: {info['winner']}"
             self.running = False
         else:
             nextp = self.env.current_player
             if self.mode == "human" and nextp != self.human_index:
-                time.sleep(0.05)
-                self.bot_act(nextp)
+                threading.Thread(target=self.bot_act, args=(nextp,), daemon=True).start()
 
     def run_ai_vs_ai(self):
         while self.auto_ai:
             self.new_hand(mode="ai_vs_ai")
             while self.running:
                 cur = self.env.current_player
-                act = HeuristicAgent().action(self.env._get_obs(cur))
-                _, _, done, _ = self.env.step(cur, act)
+                # Espera 30 segundos para "pensar"
+                time.sleep(30)
+                act = self.agents[cur].action(self.env._get_obs(cur))
+                _, _, done, info = self.env.step(cur, act)
+                self.msg = info.get("msg", "")
                 if done:
+                    if "winners" in info:
+                        self.msg = f"Ganadores: {info['winners']}"
+                    elif "winner" in info:
+                        self.msg = f"Ganador: {info['winner']}"
                     self.running = False
                     break
-                time.sleep(0.02)
-            time.sleep(0.2)
+            time.sleep(1)
             self.auto_ai = False
 
     def draw(self):
         self.draw_table()
 
-# Botones
-ui = HoldemUI(n_players=4)  # 4 jugadores: 1 humano + 3 bots
+# Botones y UI
+ui = HoldemUI(n_players=4)
 btn_new = pygame.Rect(900, 600, 220, 42)
 btn_ai = pygame.Rect(900, 660, 220, 42)
 btn_bet = pygame.Rect(100, 680, 140, 40)

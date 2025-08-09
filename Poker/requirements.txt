@@ -1,0 +1,22 @@
+# Dependencias para el proyecto de Poker con Red Neuronal
+# CardBlack Neural Poker AI
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.21.0
+
+# Visualización y gráficos
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# Interfaz gráfica
+pygame>=2.1.0
+
+# Utilidades
+tqdm>=4.64.0
+scikit-learn>=1.1.0
+
+# Opcional: Para análisis avanzado
+# tensorboard>=2.10.0
+# wandb>=0.13.0

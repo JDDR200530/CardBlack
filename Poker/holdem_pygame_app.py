@@ -513,7 +513,7 @@ class PremiumHoldemUI:
         }
         
         # Mensajes y estado
-        self.msg = "🎰 Bienvenido al Casino Premium - 4 Jugadores - Presiona 'Nueva Mano'"
+        self.msg = "🎰 Bienvenido al Casino Premium - 4 Jugadores"
         self.winner_msg = ""
         self.running = False
         self.hovered_button = -1
@@ -539,18 +539,19 @@ class PremiumHoldemUI:
         vertical_distance = 200    # Distancia vertical (Norte/Sur)
         
         self.player_positions = {
-            0: (center_x, center_y + vertical_distance),           # SUR - TÚ (abajo)
-            1: (center_x, center_y - vertical_distance),           # NORTE (arriba) 
-            2: (center_x + horizontal_distance, center_y),         # ESTE (derecha)
-            3: (center_x - horizontal_distance, center_y)          # OESTE (izquierda)
+            0: (center_x, center_y  +50+ vertical_distance),           # SUR - TÚ (abajo)
+            1: (center_x, center_y -75- vertical_distance),           # NORTE (arriba) 
+            2: (center_x +150+ horizontal_distance, center_y - 40),         # ESTE (derecha)
+            3: (center_x -150- horizontal_distance, center_y-40)          # OESTE (izquierda)
+
         }
         
         # Nombres de las posiciones para mostrar
         self.position_names = {
-            0: "SUR (TÚ)",
-            1: "NORTE", 
-            2: "ESTE",
-            3: "OESTE"
+            0: "Jugador 1(TÚ)",
+            1: "Jugador 2", 
+            2: "Jugador 3",
+            3: "Jugador 4"
         }
         
         print("🧭 Posiciones configuradas:")
@@ -594,7 +595,7 @@ class PremiumHoldemUI:
         self.current_bet = 0
         self.winner_msg = ""
         if not hasattr(self, 'msg') or "Bienvenido" not in self.msg:
-            self.msg = "Listo para nueva mano - Presiona 'Nueva Mano'"
+            self.msg = "Listo para nueva mano "
     
     def new_hand(self, mode="human"):
         """Iniciar nueva mano"""
@@ -1347,17 +1348,6 @@ class PremiumHoldemUI:
         # Indicadores sutiles de las direcciones
         center_x, center_y = ANCHO // 2, ALTO // 2
         
-        # Norte
-        self.ui.draw_text("⬆️ NORTE", center_x, 30, 'small', COLORS['text_dim'], center=True)
-        
-        # Sur  
-        self.ui.draw_text("⬇️ SUR (TÚ)", center_x, ALTO - 30, 'small', COLORS['text_gold'], center=True)
-        
-        # Este
-        self.ui.draw_text("➡️ ESTE", ANCHO - 80, center_y, 'small', COLORS['text_dim'], center=True)
-        
-        # Oeste
-        self.ui.draw_text("⬅️ OESTE", 80, center_y, 'small', COLORS['text_dim'], center=True)
 
     def draw(self):
         """Dibujar toda la interfaz"""

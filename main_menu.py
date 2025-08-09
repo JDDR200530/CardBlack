@@ -8,7 +8,7 @@ import subprocess
 # Configuración de rutas (MODIFICA ESTAS RUTAS SEGÚN TU ESTRUCTURA)
 RUTA_BLACKJACK = os.path.join(r"E:\Sistemas\CardBlack\CardBlack\blackjack\blackjack_pygame.py")
 
-RUTA_POKER = os.path.join(r"E:\Sistemas\CardBlack\CardBlack\Poker\poker_pygame.py")
+RUTA_POKER = os.path.join(r"E:\Sistemas\CardBlack\CardBlack\Poker\holdem_pygame_app.py")
 
 
 def jugar_blackjack():

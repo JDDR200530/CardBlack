@@ -19,21 +19,33 @@ def entrenar_auto_juego(n_manos=1000, usar_neural=False):
     bots = [HeuristicAgent(), RandomAgent(), HeuristicAgent()]
 
     for mano in range(n_manos):
-        env.reset()
+        obs, _ = env.reset()
         done = False
+        prev_obs = None
+        prev_action = None
+        
         while not done:
             current = env.current_player
             estado = env._get_obs(current)  # Observación o estado actual
 
             if current == 0:  # Nuestro agente entrenable
                 accion = agente_entrenable.action(estado)
+                prev_obs = estado
+                prev_action = accion
             else:
                 accion = bots[current-1].action(estado)
 
-            _, _, done, info = env.step(current, accion)
+            next_obs, rewards, done, info = env.step(current, accion)
 
-            # Ejemplo básico de actualización: guardamos última acción (puedes mejorar)
-            agente_entrenable.update(estado, accion)
+            # Actualización diferente según el tipo de agente
+            if current == 0:  # Solo actualizar nuestro agente
+                if usar_neural:
+                    # NeuralPokerAgent necesita: state, action, reward, next_state, done
+                    reward = rewards[0] if isinstance(rewards, (list, tuple)) else 0
+                    agente_entrenable.update(prev_obs, prev_action, reward, next_obs, done)
+                else:
+                    # PolicyAgent solo necesita: state, action
+                    agente_entrenable.update(estado, accion)
 
         if mano % 100 == 0:
             print(f"Mano {mano} completada")

@@ -1,4 +1,4 @@
-# poker_casino_4players_adjustable.py
+# poker_casino_4players_elimination.py
 import pygame
 import sys
 import time
@@ -65,11 +65,12 @@ COLORS = {
     'chip_green': (30, 150, 30),
     'chip_black': (40, 40, 40),
     'adjust_mode': (255, 100, 100),  # Color para modo ajuste
+    'eliminated': (100, 50, 50),     # Color para jugadores eliminados
 }
 
 # ---------- Configuración Pygame ----------
 pantalla = pygame.display.set_mode((ANCHO, ALTO), pygame.RESIZABLE)
-pygame.display.set_caption("🎰 Texas Hold'em Casino Premium - 4 Jugadores (Ajustable)")
+pygame.display.set_caption("🎰 Texas Hold'em Casino Premium - 4 Jugadores (Eliminación)")
 clock = pygame.time.Clock()
 
 # Fuentes escaladas
@@ -267,7 +268,7 @@ class CardPositionConfig:
                 'card_offsets': {
                     0: {'x': 0, 'y': -80},
                     1: {'x': 0, 'y': 40},
-                    2: {'x': -120, 'y': 0},
+                    2: {'x': -150, 'y': 0},
                     3: {'x': 80, 'y': 0}
                 },
                 'community_offset': {'x': 0, 'y': 0}
@@ -445,7 +446,7 @@ class PokerUIManager:
             )
             pygame.draw.ellipse(self.screen, (r, g, b), border_rect, 1)
     
-    def draw_card(self, x, y, card=None, hidden=False, highlight=False):
+    def draw_card(self, x, y, card=None, hidden=False, highlight=False, eliminated=False):
         """Dibuja carta con efectos premium y resaltado opcional"""
         # Sombra de la carta
         self.effects.draw_card_shadow(self.screen, x, y, CARD_W, CARD_H)
@@ -455,6 +456,12 @@ class PokerUIManager:
             highlight_rect = pygame.Rect(x - 5, y - 5, CARD_W + 10, CARD_H + 10)
             pygame.draw.rect(self.screen, COLORS['adjust_mode'], highlight_rect, 4, border_radius=8)
         
+        # Overlay de eliminación
+        if eliminated:
+            # Crear superficie semitransparente roja
+            overlay = pygame.Surface((CARD_W, CARD_H), pygame.SRCALPHA)
+            overlay.fill((*COLORS['eliminated'], 150))
+        
         if card is None or hidden:
             # Carta oculta
             self.screen.blit(self.card_back, (x, y))
@@ -462,8 +469,12 @@ class PokerUIManager:
             # Carta visible
             card_img = load_card_image_premium(card)
             self.screen.blit(card_img, (x, y))
+        
+        # Aplicar overlay de eliminación si corresponde
+        if eliminated:
+            self.screen.blit(overlay, (x, y))
 
-# ---------- Clase Principal para 4 Jugadores con Posiciones Ajustables ----------
+# ---------- Clase Principal para 4 Jugadores con Sistema de Eliminación ----------
 class PremiumHoldemUI:
     def __init__(self):
         """Inicializar juego para exactamente 4 jugadores"""
@@ -478,6 +489,12 @@ class PremiumHoldemUI:
         self.initial_stack = 2000
         self.stacks = [self.initial_stack for _ in range(self.n)]
         self.human_index = 0  # El humano siempre es jugador 0 (SUR)
+        
+        # NUEVO: Sistema de eliminación
+        self.eliminated_players = set()  # Jugadores eliminados
+        self.active_players = set(range(self.n))  # Jugadores activos
+        self.game_over = False  # Estado de fin de juego
+        self.game_winner = None  # Ganador del torneo
         
         # Configuración de juego
         self.big_blind = 40
@@ -509,17 +526,19 @@ class PremiumHoldemUI:
             'hands_played': 0,
             'hands_won': 0,
             'total_winnings': 0,
-            'biggest_pot': 0
+            'biggest_pot': 0,
+            'players_eliminated': 0
         }
         
         # Mensajes y estado
-        self.msg = "🎰 Bienvenido al Casino Premium - 4 Jugadores"
+        self.msg = "🎰 Bienvenido al Casino Premium - 4 Jugadores (Eliminación)"
         self.winner_msg = ""
         self.running = False
         self.hovered_button = -1
         
         print("🎰 Texas Hold'em Casino Premium inicializado para 4 jugadores")
         print("🧭 Posiciones: TÚ (Sur), Norte, Este, Oeste")
+        print("💀 Sistema de eliminación activado")
         print("🎯 Modo ajuste activado - Usa TAB para ajustar posiciones de cartas")
     
     def setup_cardinal_positions(self):
@@ -543,7 +562,6 @@ class PremiumHoldemUI:
             1: (center_x, center_y -75- vertical_distance),           # NORTE (arriba) 
             2: (center_x +150+ horizontal_distance, center_y - 40),         # ESTE (derecha)
             3: (center_x -150- horizontal_distance, center_y-40)          # OESTE (izquierda)
-
         }
         
         # Nombres de las posiciones para mostrar
@@ -557,6 +575,76 @@ class PremiumHoldemUI:
         print("🧭 Posiciones configuradas:")
         for i, (pos_name, coords) in enumerate(zip(self.position_names.values(), self.player_positions.values())):
             print(f"  Jugador {i}: {pos_name} - {coords}")
+    
+    def check_eliminations(self):
+        """Verificar y procesar eliminaciones de jugadores sin dinero"""
+        newly_eliminated = []
+        
+        for player_id in range(self.n):
+            if (player_id in self.active_players and 
+                self.stacks[player_id] < self.big_blind):
+                # Jugador eliminado por falta de fondos
+                self.eliminated_players.add(player_id)
+                self.active_players.discard(player_id)
+                newly_eliminated.append(player_id)
+                
+                # Actualizar estadísticas
+                if player_id != self.human_index:
+                    self.game_stats['players_eliminated'] += 1
+        
+        # Procesar eliminaciones
+        if newly_eliminated:
+            eliminated_names = []
+            for player_id in newly_eliminated:
+                if player_id == self.human_index:
+                    name = "TÚ (Sur)"
+                else:
+                    name = self.position_names[player_id]
+                eliminated_names.append(name)
+            
+            if len(eliminated_names) == 1:
+                self.msg = f"💀 {eliminated_names[0]} ha sido eliminado por falta de dinero!"
+            else:
+                self.msg = f"💀 Eliminados: {', '.join(eliminated_names)}"
+        
+        # Verificar condición de fin de juego
+        self.check_game_over()
+    
+    def check_game_over(self):
+        """Verificar si el juego ha terminado"""
+        active_count = len(self.active_players)
+        
+        if active_count <= 1:
+            # Juego terminado
+            self.game_over = True
+            self.running = False
+            self.stop_ai_vs_ai()
+            
+            if active_count == 1:
+                # Hay un ganador
+                winner_id = list(self.active_players)[0]
+                self.game_winner = winner_id
+                
+                if winner_id == self.human_index:
+                    winner_name = "¡TÚ (Sur)!"
+                    self.winner_msg = f"🏆 ¡FELICITACIONES! ¡HAS GANADO EL TORNEO! 🏆"
+                else:
+                    winner_name = self.position_names[winner_id]
+                    self.winner_msg = f"💀 Juego terminado. Ganador: {winner_name}"
+                
+                self.msg = f"🎯 TORNEO FINALIZADO - Ganador: {winner_name}"
+            else:
+                # Todos eliminados (caso raro)
+                self.winner_msg = "💀 Todos los jugadores han sido eliminados"
+                self.msg = "🎯 TORNEO FINALIZADO - Sin ganador"
+            
+            return True
+        
+        return False
+    
+    def get_active_players_for_hand(self):
+        """Obtener lista de jugadores activos para una mano"""
+        return [p for p in range(self.n) if p in self.active_players]
     
     def get_card_positions_for_player(self, player_index):
         """
@@ -590,19 +678,38 @@ class PremiumHoldemUI:
     
     def reset_hand(self):
         """Resetear mano actual"""
-        self.env.reset()
+        if not self.game_over:
+            self.env.reset()
         self.running = False
         self.current_bet = 0
         self.winner_msg = ""
         if not hasattr(self, 'msg') or "Bienvenido" not in self.msg:
-            self.msg = "Listo para nueva mano "
+            if not self.game_over:
+                self.msg = "Listo para nueva mano"
     
     def new_hand(self, mode="human"):
-        """Iniciar nueva mano"""
-        # Verificar jugadores activos
-        active_players = [i for i in range(self.n) if self.stacks[i] >= self.big_blind]
+        """Iniciar nueva mano con verificación de eliminaciones"""
+        # Verificar si el juego ha terminado
+        if self.game_over:
+            self.msg = "🎯 El torneo ha terminado. Presiona R para reiniciar."
+            return
+        
+        # Verificar eliminaciones antes de empezar la mano
+        self.check_eliminations()
+        
+        if self.game_over:
+            return
+        
+        # Verificar jugadores activos suficientes
+        active_players = self.get_active_players_for_hand()
         if len(active_players) < 2:
-            self.msg = "🚫 ¡Juego terminado! Necesitas más dinero para continuar."
+            self.check_game_over()
+            return
+        
+        # Verificar si el humano puede pagar el big blind
+        if (self.human_index in self.active_players and 
+            self.stacks[self.human_index] < self.big_blind):
+            self.check_eliminations()
             return
         
         self.hand_number += 1
@@ -612,14 +719,16 @@ class PremiumHoldemUI:
         self.current_bet = self.big_blind
         self.winner_msg = ""
         
-        # Cobrar blinds
+        # Cobrar blinds solo de jugadores activos
         self.collect_blinds()
         
         mode_names = {
             "human": "👤 Humano vs IA",
             "ai_vs_ai": "🤖 IA vs IA"
         }
-        self.msg = f"🎯 Mano #{self.hand_number} - {mode_names.get(mode, mode)}"
+        
+        active_count = len(self.active_players)
+        self.msg = f"🎯 Mano #{self.hand_number} - {mode_names.get(mode, mode)} ({active_count} jugadores activos)"
         
         # Actualizar estadísticas
         self.game_stats['hands_played'] += 1
@@ -628,25 +737,48 @@ class PremiumHoldemUI:
             self.start_ai_vs_ai()
     
     def collect_blinds(self):
-        """Cobrar small blind y big blind"""
-        # En 4 jugadores: SB = jugador 1 (Norte), BB = jugador 2 (Este)
-        sb_player = 1  # Norte
-        bb_player = 2  # Este
+        """Cobrar small blind y big blind de jugadores activos"""
+        active_players = self.get_active_players_for_hand()
+        
+        if len(active_players) < 2:
+            return
+        
+        # Determinar jugadores para blinds basado en jugadores activos
+        # SB = segundo jugador activo, BB = tercer jugador activo (o primero si solo hay 2)
+        if len(active_players) == 2:
+            sb_player = active_players[0]
+            bb_player = active_players[1]
+        else:
+            # Con más de 2 jugadores, usar rotación
+            sb_player = active_players[1] if 1 in active_players else active_players[0]
+            bb_player = active_players[2] if 2 in active_players else active_players[1]
+        
+        blind_msg = ""
         
         # Small blind
-        sb_amount = min(self.small_blind, self.stacks[sb_player])
-        self.stacks[sb_player] -= sb_amount
+        if sb_player in self.active_players:
+            sb_amount = min(self.small_blind, self.stacks[sb_player])
+            self.stacks[sb_player] -= sb_amount
+            self.env.pot += sb_amount
+            sb_name = "TÚ" if sb_player == self.human_index else self.position_names[sb_player]
+            blind_msg += f"SB: {sb_name} ${sb_amount}"
         
         # Big blind
-        bb_amount = min(self.big_blind, self.stacks[bb_player])
-        self.stacks[bb_player] -= bb_amount
+        if bb_player in self.active_players:
+            bb_amount = min(self.big_blind, self.stacks[bb_player])
+            self.stacks[bb_player] -= bb_amount
+            self.env.pot += bb_amount
+            bb_name = "TÚ" if bb_player == self.human_index else self.position_names[bb_player]
+            blind_msg += f", BB: {bb_name} ${bb_amount}"
         
-        self.env.pot += sb_amount + bb_amount
-        
-        self.msg += f" | SB: Norte ${sb_amount}, BB: Este ${bb_amount}"
+        if blind_msg:
+            self.msg += f" | {blind_msg}"
 
     def start_ai_vs_ai(self):
-        """Iniciar modo IA vs IA"""
+        """Iniciar modo IA vs IA solo con jugadores activos"""
+        if self.game_over:
+            return
+            
         if self.ai_thread is None or not self.ai_thread.is_alive():
             self.auto_ai = True
             self.ai_thread = threading.Thread(target=self.run_ai_vs_ai, daemon=True)
@@ -655,14 +787,21 @@ class PremiumHoldemUI:
     def stop_ai_vs_ai(self):
         """Detener modo IA vs IA"""
         self.auto_ai = False
-        self.msg = "🛑 Modo IA vs IA detenido"
+        if not self.game_over:
+            self.msg = "🛑 Modo IA vs IA detenido"
         if self.ai_thread and self.ai_thread.is_alive():
             self.ai_thread.join(timeout=1)
 
     def get_ai_advice(self):
         """Obtener consejo detallado de la IA"""
+        if self.game_over:
+            return "🎯 El torneo ha terminado."
+            
         if not self.running or self.env.current_player != self.human_index:
             return "⏸️ No es tu turno para pedir consejo."
+        
+        if self.human_index not in self.active_players:
+            return "💀 Has sido eliminado del torneo."
         
         try:
             obs = self.env._get_obs(self.human_index)
@@ -685,6 +824,7 @@ class PremiumHoldemUI:
             advice += f"\n💰 Pot: ${self.env.pot}"
             advice += f"\n💵 Para igualar: ${self.current_bet}"
             advice += f"\n🎯 Tu stack: ${self.stacks[self.human_index]}"
+            advice += f"\n👥 Jugadores activos: {len(self.active_players)}"
             
             return advice
             
@@ -693,6 +833,9 @@ class PremiumHoldemUI:
 
     def adjust_bet_amount(self, change):
         """Ajustar cantidad de apuesta"""
+        if self.game_over or self.human_index not in self.active_players:
+            return
+            
         old_amount = self.bet_amount
         self.bet_amount = max(self.min_bet, 
                             min(self.stacks[self.human_index], 
@@ -703,6 +846,10 @@ class PremiumHoldemUI:
 
     def toggle_advice(self):
         """Mostrar/ocultar consejo de IA"""
+        if self.game_over:
+            self.msg = "🎯 El torneo ha terminado."
+            return
+            
         if self.mode == "human":
             self.show_advice = not self.show_advice
             if self.show_advice:
@@ -714,8 +861,16 @@ class PremiumHoldemUI:
 
     def human_action(self, action):
         """Procesar acción del jugador humano"""
+        if self.game_over:
+            self.msg = "🎯 El torneo ha terminado. Presiona R para reiniciar."
+            return
+            
         if not self.running:
             self.msg = "⚠️ Inicia una nueva mano primero"
+            return
+        
+        if self.human_index not in self.active_players:
+            self.msg = "💀 Has sido eliminado del torneo"
             return
         
         if self.env.current_player != self.human_index:
@@ -751,8 +906,11 @@ class PremiumHoldemUI:
             # Ejecutar acción en el environment
             obs, reward, done, info = self.env.step(self.env.current_player, action)
             
+            # Verificar eliminaciones después de la acción
+            self.check_eliminations()
+            
             # Actualizar consejo si está activo
-            if self.show_advice and not done:
+            if self.show_advice and not done and not self.game_over:
                 self.current_advice = self.get_ai_advice()
             
         except Exception as e:
@@ -761,22 +919,24 @@ class PremiumHoldemUI:
 
         if done:
             self.handle_hand_end(info)
-        else:
+        elif not self.game_over:
             # Turno del siguiente jugador (IA)
             next_player = self.env.current_player
-            if self.mode == "human" and next_player != self.human_index:
+            if self.mode == "human" and next_player != self.human_index and next_player in self.active_players:
                 threading.Thread(target=self.bot_action, args=(next_player,), daemon=True).start()
 
     def bot_action(self, bot_index):
-        """Procesar acción del bot"""
-        if not self.running or self.stacks[bot_index] <= 0:
+        """Procesar acción del bot solo si está activo"""
+        if (self.game_over or not self.running or 
+            bot_index not in self.active_players or 
+            self.stacks[bot_index] <= 0):
             return
 
         # Tiempo de "pensamiento" del bot
         thinking_time = random.uniform(2.0, 4.0)
         time.sleep(thinking_time)
 
-        if not self.running:  # Verificar si el juego sigue activo
+        if not self.running or self.game_over or bot_index not in self.active_players:
             return
 
         try:
@@ -814,16 +974,20 @@ class PremiumHoldemUI:
             # Ejecutar en el environment
             obs, reward, done, info = self.env.step(bot_index, action)
             
+            # Verificar eliminaciones después de la acción del bot
+            self.check_eliminations()
+            
         except Exception as e:
             self.msg = f"❌ Error Bot {bot_index}: {str(e)}"
             return
 
         if done:
             self.handle_hand_end(info)
-        else:
+        elif not self.game_over:
             # Continuar con el siguiente jugador
             next_player = self.env.current_player
-            if self.mode == "human" and next_player != self.human_index:
+            if (self.mode == "human" and next_player != self.human_index and 
+                next_player in self.active_players):
                 threading.Thread(target=self.bot_action, args=(next_player,), daemon=True).start()
 
     def handle_hand_end(self, info):
@@ -833,37 +997,42 @@ class PremiumHoldemUI:
         # Distribuir el pot
         if "winners" in info and info["winners"]:
             winners = info["winners"]
-            pot_share = self.env.pot // len(winners)
-            winner_names = []
+            # Filtrar ganadores que aún están activos
+            active_winners = [w for w in winners if w in self.active_players]
             
-            for winner in winners:
-                self.stacks[winner] += pot_share
-                if winner == self.human_index:
-                    name = "TÚ (Sur)"
-                else:
-                    name = self.position_names[winner]
-                winner_names.append(name)
+            if active_winners:
+                pot_share = self.env.pot // len(active_winners)
+                winner_names = []
                 
-                # Actualizar estadísticas si el humano ganó
-                if winner == self.human_index:
-                    self.game_stats['hands_won'] += 1
-                    self.game_stats['total_winnings'] += pot_share
-            
-            self.winner_msg = f"🏆 Ganador(es): {', '.join(winner_names)} - ${pot_share} cada uno"
+                for winner in active_winners:
+                    self.stacks[winner] += pot_share
+                    if winner == self.human_index:
+                        name = "TÚ (Sur)"
+                    else:
+                        name = self.position_names[winner]
+                    winner_names.append(name)
+                    
+                    # Actualizar estadísticas si el humano ganó
+                    if winner == self.human_index:
+                        self.game_stats['hands_won'] += 1
+                        self.game_stats['total_winnings'] += pot_share
+                
+                self.winner_msg = f"🏆 Ganador(es): {', '.join(winner_names)} - ${pot_share} cada uno"
             
         elif "winner" in info:
             winner = info["winner"]
-            self.stacks[winner] += self.env.pot
-            if winner == self.human_index:
-                winner_name = "TÚ (Sur)"
-            else:
-                winner_name = self.position_names[winner]
-            self.winner_msg = f"🏆 Ganador: {winner_name} - ${self.env.pot}"
-            
-            # Actualizar estadísticas
-            if winner == self.human_index:
-                self.game_stats['hands_won'] += 1
-                self.game_stats['total_winnings'] += self.env.pot
+            if winner in self.active_players:
+                self.stacks[winner] += self.env.pot
+                if winner == self.human_index:
+                    winner_name = "TÚ (Sur)"
+                else:
+                    winner_name = self.position_names[winner]
+                self.winner_msg = f"🏆 Ganador: {winner_name} - ${self.env.pot}"
+                
+                # Actualizar estadísticas
+                if winner == self.human_index:
+                    self.game_stats['hands_won'] += 1
+                    self.game_stats['total_winnings'] += self.env.pot
         
         # Actualizar estadísticas generales
         if self.env.pot > self.game_stats['biggest_pot']:
@@ -871,27 +1040,37 @@ class PremiumHoldemUI:
         
         # Reset pot
         self.env.pot = 0
+        
+        # Verificar eliminaciones después de distribuir el pot
+        self.check_eliminations()
 
     def run_ai_vs_ai(self):
-        """Ejecutar modo IA vs IA"""
-        while self.auto_ai:
+        """Ejecutar modo IA vs IA solo con jugadores activos"""
+        while self.auto_ai and not self.game_over:
             if not self.running:
                 time.sleep(2)  # Pausa entre manos
-                if self.auto_ai:
+                if self.auto_ai and not self.game_over:
                     self.new_hand("ai_vs_ai")
             
-            while self.running and self.auto_ai:
+            while self.running and self.auto_ai and not self.game_over:
                 current_player = self.env.current_player
+                
+                # Verificar si el jugador actual está activo
+                if current_player not in self.active_players:
+                    # Fold automático si el jugador fue eliminado
+                    self.env.step(current_player, 0)
+                    continue
                 
                 if self.stacks[current_player] <= 0:
                     # Fold automático si no tiene dinero
                     self.env.step(current_player, 0)
+                    self.check_eliminations()
                     continue
                 
                 # Tiempo de pensamiento para IA vs IA
                 time.sleep(random.uniform(1.5, 3.0))
                 
-                if not self.auto_ai or not self.running:
+                if not self.auto_ai or not self.running or self.game_over:
                     break
                 
                 try:
@@ -915,19 +1094,59 @@ class PremiumHoldemUI:
                         action_msg = "se retira"
                     
                     position_name = self.position_names[current_player]
-                    self.msg = f"🤖 IA vs IA - {position_name} {action_msg}"
+                    active_count = len(self.active_players)
+                    self.msg = f"🤖 IA vs IA ({active_count} activos) - {position_name} {action_msg}"
                     
                     # Ejecutar en environment
                     _, _, done, info = self.env.step(current_player, action)
                     
-                    if done:
-                        self.handle_hand_end(info)
+                    # Verificar eliminaciones
+                    self.check_eliminations()
+                    
+                    if done or self.game_over:
+                        if not self.game_over:
+                            self.handle_hand_end(info)
                         break
                         
                 except Exception as e:
                     self.msg = f"❌ Error en IA vs IA: {str(e)}"
                     self.running = False
                     break
+
+    def restart_game(self):
+        """Reiniciar completamente el juego"""
+        # Detener IA si está corriendo
+        self.stop_ai_vs_ai()
+        
+        # Reinicializar todo el estado
+        self.stacks = [self.initial_stack for _ in range(self.n)]
+        self.eliminated_players = set()
+        self.active_players = set(range(self.n))
+        self.game_over = False
+        self.game_winner = None
+        
+        # Resetear estadísticas del juego
+        self.hand_number = 0
+        self.game_stats = {
+            'hands_played': 0,
+            'hands_won': 0,
+            'total_winnings': 0,
+            'biggest_pot': 0,
+            'players_eliminated': 0
+        }
+        
+        # Resetear estados
+        self.reset_hand()
+        self.mode = "menu"
+        self.winner_msg = ""
+        self.current_advice = ""
+        self.show_advice = False
+        
+        self.msg = "🔄 Juego reiniciado - Todos los jugadores activos con $2000"
+        
+        print("🔄 Juego completamente reiniciado")
+        print("💰 Todos los jugadores: $2000")
+        print("👥 4 jugadores activos")
 
     def draw_background(self):
         """Dibujar fondo elegante del casino"""
@@ -988,7 +1207,7 @@ class PremiumHoldemUI:
                              'small', COLORS['text_dim'], center=True)
 
     def draw_pot_info(self, table_rect):
-        """Dibujar información del pot"""
+        """Dibujar información del pot y estado del torneo"""
         pot_text = f"💰 POT: ${self.env.pot:,}"
         hand_text = f"🎯 MANO #{self.hand_number}"
         
@@ -1000,8 +1219,27 @@ class PremiumHoldemUI:
         hand_y = pot_y + 35
         self.ui.draw_text(hand_text, table_rect.centerx, hand_y, 'base', COLORS['text_silver'], center=True)
         
+        # Estado del torneo
+        active_count = len(self.active_players)
+        eliminated_count = len(self.eliminated_players)
+        
+        if self.game_over:
+            if self.game_winner is not None:
+                winner_name = "TÚ" if self.game_winner == self.human_index else self.position_names[self.game_winner]
+                tournament_text = f"🏆 TORNEO FINALIZADO - Ganador: {winner_name}"
+                color = COLORS['gold']
+            else:
+                tournament_text = "💀 TORNEO FINALIZADO - Sin ganador"
+                color = COLORS['red']
+        else:
+            tournament_text = f"👥 Activos: {active_count} | 💀 Eliminados: {eliminated_count}"
+            color = COLORS['text_silver']
+        
+        tournament_y = hand_y + 25
+        self.ui.draw_text(tournament_text, table_rect.centerx, tournament_y, 'base', color, center=True)
+        
         # Información de apuesta actual
-        if self.current_bet > 0:
+        if self.current_bet > 0 and not self.game_over:
             bet_text = f"💵 Apuesta actual: ${self.current_bet}"
             bet_y = table_rect.centery + 80
             self.ui.draw_text(bet_text, table_rect.centerx, bet_y, 'large', COLORS['orange'], center=True)
@@ -1018,6 +1256,7 @@ class PremiumHoldemUI:
         Cada jugador se muestra con:
         - Información del jugador (nombre, stack, estado)
         - Sus 2 cartas privadas posicionadas apropiadamente
+        - Indicación visual si está eliminado
         """
         x, y = self.player_positions[player_index]
         
@@ -1032,49 +1271,76 @@ class PremiumHoldemUI:
             player_height
         )
         
+        # Determinar estado del jugador
+        is_eliminated = player_index in self.eliminated_players
+        is_current_turn = self.running and self.env.current_player == player_index and not is_eliminated
+        is_human = player_index == self.human_index
+        
         # Color según estado
-        if self.stacks[player_index] <= 0:
-            bg_color = (60, 60, 60)  # Sin dinero
-        elif self.running and self.env.current_player == player_index:
-            bg_color = (100, 200, 100)  # Turno actual
-        elif player_index == self.human_index:
-            bg_color = (50, 100, 200)  # Jugador humano
+        if is_eliminated:
+            bg_color = COLORS['eliminated']  # Rojo oscuro para eliminados
+        elif is_current_turn:
+            bg_color = (100, 200, 100)  # Verde para turno actual
+        elif is_human:
+            bg_color = (50, 100, 200)  # Azul para jugador humano
         else:
-            bg_color = (80, 80, 120)  # Bots
+            bg_color = (80, 80, 120)  # Gris para bots
         
         # Fondo del jugador con gradiente
         gradient_light = tuple(min(255, c + 40) for c in bg_color)
         self.ui.effects.draw_gradient_rect(pantalla, gradient_light, bg_color, player_rect)
         
-        # Borde dorado
-        border_color = COLORS['gold'] if self.running and self.env.current_player == player_index else COLORS['silver']
-        pygame.draw.rect(pantalla, border_color, player_rect, 3, border_radius=15)
+        # Borde según estado
+        if is_eliminated:
+            border_color = COLORS['red']
+            border_width = 4
+        elif is_current_turn:
+            border_color = COLORS['gold']
+            border_width = 4
+        else:
+            border_color = COLORS['silver']
+            border_width = 3
+        
+        pygame.draw.rect(pantalla, border_color, player_rect, border_width, border_radius=15)
         
         # Información del jugador
-        if player_index == self.human_index:
+        if is_human:
             name = "👤 TÚ (SUR)"
         else:
             name = f"🤖 {self.position_names[player_index]}"
         
-        stack_text = f"💰 ${self.stacks[player_index]:,}"
+        # Añadir estado de eliminación
+        if is_eliminated:
+            name += " 💀"
+            stack_text = "💀 ELIMINADO"
+            stack_color = COLORS['red']
+        else:
+            stack_text = f"💰 ${self.stacks[player_index]:,}"
+            if self.stacks[player_index] > self.initial_stack:
+                stack_color = COLORS['green']
+            elif self.stacks[player_index] < self.big_blind:
+                stack_color = COLORS['red']
+            else:
+                stack_color = COLORS['orange']
         
         # Estado adicional
         status = ""
-        if self.stacks[player_index] <= 0:
-            status = " 💸 SIN DINERO"
-        elif hasattr(self.env, 'folded') and player_index in getattr(self.env, 'folded', []):
-            status = " 🚫 FOLD"
+        if not is_eliminated:
+            if self.stacks[player_index] < self.big_blind:
+                status = " ⚠️ EN PELIGRO"
+            elif hasattr(self.env, 'folded') and player_index in getattr(self.env, 'folded', []):
+                status = " 🚫 FOLD"
         
         # Dibujar textos
         name_y = player_rect.y + 10
-        self.ui.draw_text(name + status, player_rect.x + 8, name_y, 'small', COLORS['white'])
+        name_color = COLORS['red'] if is_eliminated else COLORS['white']
+        self.ui.draw_text(name + status, player_rect.x + 8, name_y, 'small', name_color)
         
         stack_y = name_y + 25
-        stack_color = COLORS['green'] if self.stacks[player_index] > self.initial_stack else COLORS['orange']
         self.ui.draw_text(stack_text, player_rect.x + 8, stack_y, 'base', stack_color)
         
-        # Apuesta actual del jugador
-        if hasattr(self.env, 'current_bets') and player_index in getattr(self.env, 'current_bets', {}):
+        # Apuesta actual del jugador (solo si no está eliminado)
+        if not is_eliminated and hasattr(self.env, 'current_bets') and player_index in getattr(self.env, 'current_bets', {}):
             bet_amount = self.env.current_bets[player_index]
             if bet_amount > 0:
                 bet_y = stack_y + 20
@@ -1097,6 +1363,7 @@ class PremiumHoldemUI:
             return
         
         # Determinar si mostrar cartas
+        is_eliminated = player_index in self.eliminated_players
         show_cards = (
             player_index == self.human_index or  # Siempre mostrar cartas del humano
             not self.running or  # Mostrar al final del juego
@@ -1117,9 +1384,9 @@ class PremiumHoldemUI:
             card_x = cards_x + i * (CARD_W + 10)
             
             if show_cards:
-                self.ui.draw_card(card_x, cards_y, card, highlight=highlight)
+                self.ui.draw_card(card_x, cards_y, card, highlight=highlight, eliminated=is_eliminated)
             else:
-                self.ui.draw_card(card_x, cards_y, hidden=True, highlight=highlight)
+                self.ui.draw_card(card_x, cards_y, hidden=True, highlight=highlight, eliminated=is_eliminated)
 
     def draw_adjustment_panel(self):
         """Dibujar panel de ajuste de posiciones"""
@@ -1187,14 +1454,21 @@ class PremiumHoldemUI:
             self.ui.draw_text(self.msg, 20, info_y, 'base', COLORS['text_light'])
         
         # Etapa del juego
-        stage_text = f"📊 Etapa: {getattr(self.env, 'round_stage', 'Inicio')}"
-        self.ui.draw_text(stage_text, 20, info_y + 25, 'base', COLORS['text_silver'])
+        if not self.game_over:
+            stage_text = f"📊 Etapa: {getattr(self.env, 'round_stage', 'Inicio')}"
+            self.ui.draw_text(stage_text, 20, info_y + 25, 'base', COLORS['text_silver'])
         
         # Modo de juego
-        mode_text = f"🎮 Modo: {self.mode.replace('_', ' ').title()}"
-        if self.auto_ai:
-            mode_text += " (ACTIVO)"
-        self.ui.draw_text(mode_text, 20, info_y + 50, 'base', COLORS['text_gold'])
+        if self.game_over:
+            mode_text = "🎯 TORNEO FINALIZADO"
+            mode_color = COLORS['red']
+        else:
+            mode_text = f"🎮 Modo: {self.mode.replace('_', ' ').title()}"
+            if self.auto_ai:
+                mode_text += " (ACTIVO)"
+            mode_color = COLORS['text_gold']
+            
+        self.ui.draw_text(mode_text, 20, info_y + 50, 'base', mode_color)
 
     def draw_winner_message(self):
         """Dibujar mensaje de ganador"""
@@ -1203,7 +1477,7 @@ class PremiumHoldemUI:
         
         # Fondo del mensaje
         msg_width = 600
-        msg_height = 120
+        msg_height = 140
         msg_rect = pygame.Rect(
             ANCHO // 2 - msg_width // 2,
             ALTO // 2 - msg_height // 2,
@@ -1211,32 +1485,63 @@ class PremiumHoldemUI:
             msg_height
         )
         
+        # Color según tipo de mensaje
+        if self.game_over and self.game_winner == self.human_index:
+            # Victoria del torneo
+            bg_light = (0, 200, 0)
+            bg_dark = (0, 150, 0)
+            border_color = COLORS['gold']
+        elif self.game_over:
+            # Fin del torneo (derrota)
+            bg_light = (200, 0, 0)
+            bg_dark = (150, 0, 0)
+            border_color = COLORS['red']
+        else:
+            # Victoria de mano normal
+            bg_light = (0, 150, 0)
+            bg_dark = (0, 100, 0)
+            border_color = COLORS['gold']
+        
         # Fondo con gradiente
-        bg_light = (0, 150, 0)
-        bg_dark = (0, 100, 0)
         self.ui.effects.draw_gradient_rect(pantalla, bg_light, bg_dark, msg_rect)
         
-        # Borde dorado
-        pygame.draw.rect(pantalla, COLORS['gold'], msg_rect, 4, border_radius=20)
+        # Borde
+        pygame.draw.rect(pantalla, border_color, msg_rect, 4, border_radius=20)
         
-        # Texto del ganador
+        # Título según contexto
+        if self.game_over:
+            if self.game_winner == self.human_index:
+                title = "🏆 ¡CAMPEÓN DEL TORNEO! 🏆"
+                title_color = COLORS['gold']
+            else:
+                title = "💀 TORNEO FINALIZADO 💀"
+                title_color = COLORS['red']
+        else:
+            title = "🏆 RESULTADO DE LA MANO 🏆"
+            title_color = COLORS['gold']
+        
         title_y = msg_rect.y + 15
-        self.ui.draw_text("🏆 RESULTADO DE LA MANO 🏆", msg_rect.centerx, title_y, 
-                         'large', COLORS['gold'], center=True)
+        self.ui.draw_text(title, msg_rect.centerx, title_y, 
+                         'large', title_color, center=True)
         
         # Mensaje principal
         main_y = title_y + 35
         self.ui.draw_text(self.winner_msg, msg_rect.centerx, main_y, 'base', 
                          COLORS['white'], center=True)
         
-        # Instrucción
-        instr_y = main_y + 30
-        self.ui.draw_text("Presiona cualquier tecla para continuar", msg_rect.centerx, instr_y, 
+        # Instrucción según contexto
+        if self.game_over:
+            instr_text = "Presiona R para reiniciar el torneo"
+        else:
+            instr_text = "Presiona cualquier tecla para continuar"
+            
+        instr_y = main_y + 35
+        self.ui.draw_text(instr_text, msg_rect.centerx, instr_y, 
                          'small', COLORS['text_silver'], center=True)
 
     def draw_advice_panel(self):
         """Dibujar panel de consejo de IA"""
-        if not self.show_advice or not self.current_advice:
+        if not self.show_advice or not self.current_advice or self.game_over:
             return
         
         # Panel de consejo
@@ -1286,13 +1591,13 @@ class PremiumHoldemUI:
                          panel_rect.centerx, close_y, 'small', COLORS['text_silver'], center=True)
 
     def draw_statistics_panel(self):
-        """Dibujar panel de estadísticas"""
+        """Dibujar panel de estadísticas con información de eliminación"""
         if self.game_stats['hands_played'] == 0:
             return
         
         # Panel en esquina superior derecha
-        panel_width = 280
-        panel_height = 140
+        panel_width = 300
+        panel_height = 160
         panel_rect = pygame.Rect(ANCHO - panel_width - 20, 20, panel_width, panel_height)
         
         # Fondo semitransparente
@@ -1301,32 +1606,49 @@ class PremiumHoldemUI:
         pantalla.blit(bg_surface, panel_rect.topleft)
         
         # Borde
-        pygame.draw.rect(pantalla, COLORS['silver'], panel_rect, 2, border_radius=10)
+        border_color = COLORS['gold'] if not self.game_over else COLORS['red']
+        pygame.draw.rect(pantalla, border_color, panel_rect, 2, border_radius=10)
         
         # Título
-        self.ui.draw_text("📊 ESTADÍSTICAS - 4 JUGADORES", panel_rect.x + 10, panel_rect.y + 10, 
+        title = "📊 ESTADÍSTICAS DEL TORNEO" if self.game_over else "📊 ESTADÍSTICAS - 4 JUGADORES"
+        self.ui.draw_text(title, panel_rect.x + 10, panel_rect.y + 10, 
                          'base', COLORS['gold'])
         
         # Estadísticas
         stats_y = panel_rect.y + 35
-        win_rate = (self.game_stats['hands_won'] / self.game_stats['hands_played']) * 100
+        win_rate = (self.game_stats['hands_won'] / self.game_stats['hands_played']) * 100 if self.game_stats['hands_played'] > 0 else 0
         
         stats_text = [
             f"Manos jugadas: {self.game_stats['hands_played']}",
             f"Manos ganadas: {self.game_stats['hands_won']}",
             f"% Victorias: {win_rate:.1f}%",
             f"Mayor pot: ${self.game_stats['biggest_pot']:,}",
-            f"Ganancias totales: ${self.game_stats['total_winnings']:,}"
+            f"Ganancias totales: ${self.game_stats['total_winnings']:,}",
+            f"Bots eliminados: {self.game_stats['players_eliminated']}"
         ]
         
         for i, stat in enumerate(stats_text):
+            color = COLORS['text_light']
+            if "Ganancias totales" in stat and self.game_stats['total_winnings'] > 0:
+                color = COLORS['green']
+            elif "% Victorias" in stat and win_rate > 50:
+                color = COLORS['green']
+            
             self.ui.draw_text(stat, panel_rect.x + 10, stats_y + i * 18, 
-                             'small', COLORS['text_light'])
+                             'small', color)
 
     def draw_controls_help(self):
         """Dibujar ayuda de controles"""
         if self.card_config.adjustment_mode:
             return  # No mostrar controles normales en modo ajuste
+            
+        if self.game_over:
+            # Controles para juego terminado
+            help_y = ALTO - 100
+            self.ui.draw_text("⌨️ CONTROLES:", 20, help_y, 'base', COLORS['text_gold'])
+            self.ui.draw_text("R - Reiniciar torneo  |  ESC - Salir", 20, help_y + 20, 
+                             'small', COLORS['text_dim'])
+            return
             
         if self.mode != "human" or not self.running:
             return
@@ -1337,17 +1659,45 @@ class PremiumHoldemUI:
         controls = [
             "F - Retirarse  |  ESPACIO - Call/Check  |  B - Apostar",
             "Q/E - Apuesta ±$25  |  Z/X - Apuesta ±$100  |  C - Consejo IA",
-            "TAB - Modo ajuste cartas  |  P - Presets posición"
+            "TAB - Modo ajuste cartas  |  P - Presets posición  |  R - Reiniciar"
         ]
         
         for i, control in enumerate(controls):
             self.ui.draw_text(control, 20, help_y + 20 + i * 18, 'small', COLORS['text_dim'])
 
-    def draw_cardinal_directions(self):
-        """Dibujar indicadores de direcciones cardinales"""
-        # Indicadores sutiles de las direcciones
-        center_x, center_y = ANCHO // 2, ALTO // 2
+    def draw_elimination_status(self):
+        """Dibujar estado de eliminación en la esquina"""
+        if len(self.eliminated_players) == 0:
+            return
+            
+        # Panel pequeño en esquina inferior izquierda
+        panel_width = 250
+        panel_height = 80
+        panel_rect = pygame.Rect(20, ALTO - panel_height - 20, panel_width, panel_height)
         
+        # Fondo semitransparente
+        bg_surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        bg_surface.fill((*COLORS['eliminated'], 150))
+        pantalla.blit(bg_surface, panel_rect.topleft)
+        
+        # Borde
+        pygame.draw.rect(pantalla, COLORS['red'], panel_rect, 2, border_radius=8)
+        
+        # Título
+        self.ui.draw_text("💀 JUGADORES ELIMINADOS", panel_rect.x + 10, panel_rect.y + 10, 
+                         'base', COLORS['red'])
+        
+        # Lista de eliminados
+        eliminated_names = []
+        for player_id in self.eliminated_players:
+            if player_id == self.human_index:
+                eliminated_names.append("TÚ")
+            else:
+                eliminated_names.append(self.position_names[player_id].split()[1])  # Solo el número
+        
+        eliminated_text = ", ".join(eliminated_names)
+        self.ui.draw_text(eliminated_text, panel_rect.x + 10, panel_rect.y + 35, 
+                         'small', COLORS['white'])
 
     def draw(self):
         """Dibujar toda la interfaz"""
@@ -1365,12 +1715,12 @@ class PremiumHoldemUI:
         # Información de juego
         self.draw_game_info()
         self.draw_controls_help()
-        self.draw_cardinal_directions()
         
         # Paneles especiales
         self.draw_winner_message()
         self.draw_advice_panel()
         self.draw_statistics_panel()
+        self.draw_elimination_status()
         
         # Panel de ajuste (si está activo)
         self.draw_adjustment_panel()
@@ -1385,14 +1735,15 @@ def setup_buttons():
     
     # Botones principales (lado derecho)
     buttons_x = ANCHO - button_width - 30
-    buttons_start_y = ALTO - int(360 * UI_SCALE)  # Más espacio para botón de ajuste
+    buttons_start_y = ALTO - int(380 * UI_SCALE)  # Más espacio para botón de restart
     
     main_buttons = {
         'new_hand': pygame.Rect(buttons_x, buttons_start_y, button_width, button_height),
         'ai_vs_ai': pygame.Rect(buttons_x, buttons_start_y + button_height + button_spacing, button_width, button_height),
         'stop_ai': pygame.Rect(buttons_x, buttons_start_y + 2*(button_height + button_spacing), button_width, button_height),
         'advice': pygame.Rect(buttons_x, buttons_start_y + 3*(button_height + button_spacing), button_width, button_height),
-        'adjust': pygame.Rect(buttons_x, buttons_start_y + 4*(button_height + button_spacing), button_width, button_height)
+        'adjust': pygame.Rect(buttons_x, buttons_start_y + 4*(button_height + button_spacing), button_width, button_height),
+        'restart': pygame.Rect(buttons_x, buttons_start_y + 5*(button_height + button_spacing), button_width, button_height)
     }
     
     # Botones de acción (parte inferior)
@@ -1413,7 +1764,7 @@ def setup_buttons():
 def draw_buttons(ui_instance, main_buttons, action_buttons):
     """Dibujar todos los botones de la interfaz"""
     # Botones principales
-    new_hand_enabled = not ui_instance.auto_ai
+    new_hand_enabled = not ui_instance.auto_ai and not ui_instance.game_over
     new_hand_color = 'primary' if new_hand_enabled else 'secondary'
     ui_instance.ui.draw_premium_button(
         main_buttons['new_hand'], 
@@ -1423,13 +1774,14 @@ def draw_buttons(ui_instance, main_buttons, action_buttons):
         ui_instance.hovered_button == 0
     )
     
+    ai_enabled = not ui_instance.game_over
     ai_text = "🛑 IA ACTIVO" if ui_instance.auto_ai else "🤖 Iniciar IA vs IA"
     ai_color = 'warning' if ui_instance.auto_ai else 'success'
     ui_instance.ui.draw_premium_button(
         main_buttons['ai_vs_ai'], 
         ai_text, 
         ai_color, 
-        True,
+        ai_enabled,
         ui_instance.hovered_button == 1
     )
     
@@ -1442,13 +1794,14 @@ def draw_buttons(ui_instance, main_buttons, action_buttons):
         ui_instance.hovered_button == 2
     )
     
+    advice_enabled = ui_instance.mode == "human" and not ui_instance.game_over
     advice_text = "🤖 Ocultar Consejo" if ui_instance.show_advice else "💡 Consejo IA"
     advice_color = 'success' if ui_instance.show_advice else 'premium'
     ui_instance.ui.draw_premium_button(
         main_buttons['advice'], 
         advice_text, 
         advice_color, 
-        ui_instance.mode == "human",
+        advice_enabled,
         ui_instance.hovered_button == 3
     )
     
@@ -1463,15 +1816,30 @@ def draw_buttons(ui_instance, main_buttons, action_buttons):
         ui_instance.hovered_button == 4
     )
     
-    # Botones de acción (solo en modo humano y no en modo ajuste)
-    if ui_instance.mode == "human" and ui_instance.running and not ui_instance.card_config.adjustment_mode:
+    # Botón de reinicio
+    restart_text = "🔄 Reiniciar Torneo"
+    restart_color = 'warning'
+    ui_instance.ui.draw_premium_button(
+        main_buttons['restart'], 
+        restart_text, 
+        restart_color, 
+        True,
+        ui_instance.hovered_button == 5
+    )
+    
+    # Botones de acción (solo en modo humano, no eliminado y no en modo ajuste)
+    if (ui_instance.mode == "human" and ui_instance.running and 
+        not ui_instance.card_config.adjustment_mode and 
+        ui_instance.human_index in ui_instance.active_players and
+        not ui_instance.game_over):
+        
         # Fold
         ui_instance.ui.draw_premium_button(
             action_buttons['fold'], 
             "🚫 Fold", 
             'primary', 
             True,
-            ui_instance.hovered_button == 5
+            ui_instance.hovered_button == 6
         )
         
         # Call/Check
@@ -1481,7 +1849,7 @@ def draw_buttons(ui_instance, main_buttons, action_buttons):
             call_text, 
             'success', 
             True,
-            ui_instance.hovered_button == 6
+            ui_instance.hovered_button == 7
         )
         
         # Bet/Raise
@@ -1491,7 +1859,7 @@ def draw_buttons(ui_instance, main_buttons, action_buttons):
             f"🎯 Bet ${ui_instance.bet_amount}", 
             'warning', 
             bet_enabled,
-            ui_instance.hovered_button == 7
+            ui_instance.hovered_button == 8
         )
         
         # All-in
@@ -1501,7 +1869,7 @@ def draw_buttons(ui_instance, main_buttons, action_buttons):
             f"🔥 All-in", 
             'premium', 
             all_in_amount > 0,
-            ui_instance.hovered_button == 8
+            ui_instance.hovered_button == 9
         )
 
 def update_hover_state(ui_instance, mouse_pos, main_buttons, action_buttons):
@@ -1516,10 +1884,12 @@ def update_hover_state(ui_instance, mouse_pos, main_buttons, action_buttons):
     
     # Verificar botones de acción (solo si están visibles)
     if (ui_instance.mode == "human" and ui_instance.running and 
-        not ui_instance.card_config.adjustment_mode):
+        not ui_instance.card_config.adjustment_mode and
+        ui_instance.human_index in ui_instance.active_players and
+        not ui_instance.game_over):
         for i, (key, rect) in enumerate(action_buttons.items()):
             if rect.collidepoint(mouse_pos):
-                ui_instance.hovered_button = i + 5  # Offset para botones de acción
+                ui_instance.hovered_button = i + 6  # Offset para botones de acción
                 return
 
 def handle_position_adjustment_keys(ui_instance, event):
@@ -1583,13 +1953,18 @@ def main_loop():
     ui = PremiumHoldemUI()  # Sin parámetros, siempre 4 jugadores
     main_buttons, action_buttons = setup_buttons()
     
-    print("🎰 Casino Premium iniciado correctamente - 4 Jugadores")
+    print("🎰 Casino Premium iniciado correctamente - 4 Jugadores con Eliminación")
     print("=" * 60)
     print("🧭 POSICIONES EN LA MESA:")
     print("  • TÚ: SUR (Abajo de la pantalla)")
     print("  • Bot Norte: NORTE (Arriba de la pantalla)")
     print("  • Bot Este: ESTE (Derecha de la pantalla)")
     print("  • Bot Oeste: OESTE (Izquierda de la pantalla)")
+    print()
+    print("💀 SISTEMA DE ELIMINACIÓN:")
+    print("  • Los jugadores sin dinero para el big blind son eliminados")
+    print("  • El torneo termina cuando solo queda 1 jugador")
+    print("  • Gana el último jugador en pie")
     print()
     print("🃏 POSICIONAMIENTO DE CARTAS AJUSTABLE:")
     print("  • Cartas comunitarias: Centro de la mesa (ajustable)")
@@ -1603,6 +1978,7 @@ def main_loop():
     print("  ESPACIO - Call/Check")
     print("  B - Bet/Raise")
     print("  C - Mostrar/Ocultar consejo IA")
+    print("  R - Reiniciar torneo completo")
     print("  Q/E - Ajustar apuesta ±$25")
     print("  Z/X - Ajustar apuesta ±$100")
     print("=" * 60)
@@ -1652,11 +2028,11 @@ def main_loop():
                 mx, my = event.pos
                 
                 # Botones principales
-                if main_buttons['new_hand'].collidepoint(mx, my) and not ui.auto_ai:
+                if main_buttons['new_hand'].collidepoint(mx, my) and not ui.auto_ai and not ui.game_over:
                     ui.stop_ai_vs_ai()
                     ui.new_hand(mode="human")
                     
-                elif main_buttons['ai_vs_ai'].collidepoint(mx, my):
+                elif main_buttons['ai_vs_ai'].collidepoint(mx, my) and not ui.game_over:
                     if ui.auto_ai:
                         ui.stop_ai_vs_ai()
                     else:
@@ -1665,7 +2041,7 @@ def main_loop():
                 elif main_buttons['stop_ai'].collidepoint(mx, my) and ui.auto_ai:
                     ui.stop_ai_vs_ai()
                     
-                elif main_buttons['advice'].collidepoint(mx, my) and ui.mode == "human":
+                elif main_buttons['advice'].collidepoint(mx, my) and ui.mode == "human" and not ui.game_over:
                     ui.toggle_advice()
                 
                 elif main_buttons['adjust'].collidepoint(mx, my):
@@ -1676,9 +2052,15 @@ def main_loop():
                     else:
                         ui.msg = "🎯 Modo ajuste desactivado"
                 
-                # Botones de acción (solo en modo humano y no en ajuste)
+                elif main_buttons['restart'].collidepoint(mx, my):
+                    # Reiniciar torneo completo
+                    ui.restart_game()
+                
+                # Botones de acción (solo en modo humano, no eliminado y no en ajuste)
                 elif (ui.mode == "human" and ui.running and 
-                      not ui.card_config.adjustment_mode):
+                      not ui.card_config.adjustment_mode and 
+                      ui.human_index in ui.active_players and
+                      not ui.game_over):
                     if action_buttons['fold'].collidepoint(mx, my):
                         ui.human_action(0)  # Fold
                     elif action_buttons['call'].collidepoint(mx, my):
@@ -1707,43 +2089,41 @@ def main_loop():
                     else:
                         ui.msg = "🎯 Modo ajuste desactivado"
                     
-                elif event.key == pygame.K_n and not ui.card_config.adjustment_mode:
+                elif event.key == pygame.K_n and not ui.card_config.adjustment_mode and not ui.game_over:
                     ui.stop_ai_vs_ai()
                     ui.new_hand(mode="human")
                     
-                elif event.key == pygame.K_a and not ui.card_config.adjustment_mode:
+                elif event.key == pygame.K_a and not ui.card_config.adjustment_mode and not ui.game_over:
                     if ui.auto_ai:
                         ui.stop_ai_vs_ai()
                     else:
                         ui.new_hand(mode="ai_vs_ai")
                         
                 elif event.key == pygame.K_r and not ui.card_config.adjustment_mode:
-                    # Reset completo del juego
-                    ui.stop_ai_vs_ai()
-                    ui.__init__()  # Reinicializar para 4 jugadores
-                    ui.msg = "🔄 Juego reiniciado completamente - 4 Jugadores"
+                    # Reiniciar torneo completo
+                    ui.restart_game()
                     
-                elif ui.mode == "human" and not ui.card_config.adjustment_mode:
-                    if event.key == pygame.K_f and ui.running:
+                elif ui.mode == "human" and not ui.card_config.adjustment_mode and not ui.game_over:
+                    if event.key == pygame.K_f and ui.running and ui.human_index in ui.active_players:
                         ui.human_action(0)  # Fold
-                    elif event.key == pygame.K_SPACE and ui.running:
+                    elif event.key == pygame.K_SPACE and ui.running and ui.human_index in ui.active_players:
                         ui.human_action(1)  # Call/Check
-                    elif event.key == pygame.K_b and ui.running:
+                    elif event.key == pygame.K_b and ui.running and ui.human_index in ui.active_players:
                         ui.human_action(2)  # Bet/Raise
                     elif event.key == pygame.K_c:
                         ui.toggle_advice()
                     
-                    # Ajustes de apuesta
-                    elif event.key == pygame.K_q:
+                    # Ajustes de apuesta (solo si no está eliminado)
+                    elif event.key == pygame.K_q and ui.human_index in ui.active_players:
                         ui.adjust_bet_amount(-25)
-                    elif event.key == pygame.K_e:
+                    elif event.key == pygame.K_e and ui.human_index in ui.active_players:
                         ui.adjust_bet_amount(25)
-                    elif event.key == pygame.K_z:
+                    elif event.key == pygame.K_z and ui.human_index in ui.active_players:
                         ui.adjust_bet_amount(-100)
-                    elif event.key == pygame.K_x:
+                    elif event.key == pygame.K_x and ui.human_index in ui.active_players:
                         ui.adjust_bet_amount(100)
                 
-                # Limpiar mensaje de ganador con cualquier tecla
+                # Limpiar mensaje de ganador con cualquier tecla (excepto en modo ajuste)
                 if ui.winner_msg and not ui.card_config.adjustment_mode:
                     ui.winner_msg = ""
         
@@ -1802,7 +2182,7 @@ class RandomAgent:
 if __name__ == "__main__":
     print("🎰" + "="*50 + "🎰")
     print("    TEXAS HOLD'EM CASINO PREMIUM")
-    print("   Versión 4 Jugadores v2.1 AJUSTABLE")
+    print("   Versión 4 Jugadores v3.0 ELIMINACIÓN")
     print("🎰" + "="*50 + "🎰")
     print()
     print("🧭 Configuración Cardinal:")
@@ -1810,11 +2190,18 @@ if __name__ == "__main__":
     print("   ⬅️ OESTE (Bot)    ➡️ ESTE (Bot)")
     print("   ⬇️ SUR (TÚ)")
     print()
-    print("🎯 NUEVA FUNCIÓN: Posiciones Ajustables")
+    print("💀 NUEVAS CARACTERÍSTICAS:")
+    print("   • Sistema de eliminación automático")
+    print("   • Jugadores sin dinero para big blind son eliminados")
+    print("   • El torneo termina cuando solo queda 1 jugador")
+    print("   • Estadísticas de eliminación")
+    print("   • Botón de reinicio de torneo")
+    print()
+    print("🎯 FUNCIÓN: Posiciones Ajustables")
     print("   • TAB: Activar modo ajuste")
     print("   • Flechas: Mover cartas seleccionadas")
     print("   • P: Cambiar presets (Default/Compact/Spread)")
-    print("   • R: Resetear posiciones")
+    print("   • R: Reiniciar torneo O resetear posiciones (en modo ajuste)")
     print()
     print("🔧 Inicializando componentes...")
     
@@ -1826,10 +2213,11 @@ if __name__ == "__main__":
         print("✅ IA agents inicializados")
         print("✅ Posiciones cardinales configuradas")
         print("✅ Sistema de ajuste de posiciones activado")
+        print("✅ Sistema de eliminación implementado")
         print()
         
         # Iniciar el juego
-        print("🚀 Iniciando Casino Premium - 4 Jugadores Ajustable...")
+        print("🚀 Iniciando Casino Premium - 4 Jugadores con Eliminación...")
         main_loop()
         
     except ImportError as e:

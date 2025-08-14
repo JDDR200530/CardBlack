@@ -9,8 +9,8 @@ from PIL import Image, ImageTk
 import threading
 
 # Configuración de rutas (MODIFICA ESTAS RUTAS SEGÚN TU ESTRUCTURA)
-RUTA_BLACKJACK = os.path.join(r"E:\Sistemas\CardBlack\CardBlack\blackjack\blackjack_pygame.py")
-RUTA_POKER = os.path.join(r"E:\Sistemas\CardBlack\CardBlack\Poker\holdem_pygame_app.py")
+RUTA_BLACKJACK = os.path.join(r"/home/togg/Documentos/CardBlack/Blackjack/blackjack_gui.py")
+RUTA_POKER = os.path.join(r"/home/togg/Documentos/CardBlack/Poker/holdem_pygame_app.py")
 
 # Ruta de la música (coloca un archivo .mp3 o .wav en la misma carpeta)
 RUTA_MUSICA = "casino_music.mp3"  # Cambia por tu archivo de música
